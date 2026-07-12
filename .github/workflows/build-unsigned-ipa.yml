@@ -76,7 +76,7 @@ jobs:
 
       - name: Restore cached llama.cpp libraries
         id: llama-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: Dependencies/llama-build/products
           key: etos-llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Dependencies/llama.cpp/CMakeLists.txt', 'scripts/build-llama-static-library.sh') }}
@@ -136,6 +136,13 @@ jobs:
               xcrun lipo -info "$library"
             done
           } 2>&1 | tee "$BUILD_LOGS/llama-products.log"
+
+      - name: Save llama.cpp libraries immediately
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: Dependencies/llama-build/products
+          key: ${{ steps.llama-cache.outputs.cache-primary-key }}
 
       - name: Resolve Swift packages
         shell: bash
