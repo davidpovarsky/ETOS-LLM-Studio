@@ -74,6 +74,13 @@ jobs:
             system_profiler SPSoftwareDataType
           } 2>&1 | tee "$BUILD_LOGS/environment.log"
 
+      - name: Restore cached llama.cpp libraries
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: Dependencies/llama-build/products
+          key: etos-llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Dependencies/llama.cpp/CMakeLists.txt', 'scripts/build-llama-static-library.sh') }}
+
       - name: Inspect Xcode workspace
         shell: bash
         run: |
@@ -84,6 +91,21 @@ jobs:
             -list
           )
           xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/xcodebuild-list.log"
+
+      - name: Validate multi-platform build settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          settings="$(xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -destination "generic/platform=iOS" -showBuildSettings 2>&1)"
+          printf '%s\n' "$settings" | tee "$BUILD_LOGS/build-settings.log"
+          if ! printf '%s\n' "$settings" | grep -q 'SDKROOT = iphoneos'; then
+            echo "::error::The iOS target did not resolve to the iphoneos SDK."
+            exit 1
+          fi
+          if ! printf '%s\n' "$settings" | grep -q 'SDKROOT = watchos'; then
+            echo "::error::The embedded Watch target did not resolve to the watchos SDK."
+            exit 1
+          fi
 
       - name: Build llama.cpp static library for iOS
         shell: bash
@@ -133,11 +155,9 @@ jobs:
             -workspace "$WORKSPACE"
             -scheme "$SCHEME"
             -configuration "$CONFIGURATION"
-            -sdk iphoneos
             -destination "generic/platform=iOS"
             -derivedDataPath "$DERIVED_DATA"
             -resultBundlePath "$BUILD_LOGS/ETOS-LLM-Studio.xcresult"
-            IPHONEOS_DEPLOYMENT_TARGET=17.0
             CODE_SIGNING_ALLOWED=NO
             CODE_SIGNING_REQUIRED=NO
             CODE_SIGN_IDENTITY=
