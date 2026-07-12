@@ -102,8 +102,9 @@ jobs:
             echo "::error::The iOS target did not resolve to the iphoneos SDK."
             exit 1
           fi
-          if ! printf '%s\n' "$settings" | grep -q 'SDKROOT = watchos'; then
-            echo "::error::The embedded Watch target did not resolve to the watchos SDK."
+          PROJECT_FILE="ETOS LLM Studio/ETOS LLM Studio.xcodeproj/project.pbxproj"
+          if ! grep -q 'SDKROOT = watchos;' "$PROJECT_FILE"; then
+            echo "::error::The Xcode project does not declare a watchOS SDK for the embedded Watch target."
             exit 1
           fi
 
