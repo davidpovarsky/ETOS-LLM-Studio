@@ -70,8 +70,6 @@ jobs:
             ninja --version
             echo
             git submodule status --recursive
-            echo
-            system_profiler SPSoftwareDataType
           } 2>&1 | tee "$BUILD_LOGS/environment.log"
 
       - name: Restore cached llama.cpp libraries
@@ -81,58 +79,40 @@ jobs:
           path: Dependencies/llama-build/products
           key: etos-llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Dependencies/llama.cpp/CMakeLists.txt', 'scripts/build-llama-static-library.sh') }}
 
-      - name: Inspect Xcode workspace
+      - name: Inspect workspace and resolve packages
         shell: bash
         run: |
           set -o pipefail
-          args=(
-            -workspace "$WORKSPACE"
-            -scheme "$SCHEME"
-            -list
-          )
-          xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/xcodebuild-list.log"
-
-      - name: Validate multi-platform build settings
-        shell: bash
-        run: |
-          set -euo pipefail
-          settings="$(xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -destination "generic/platform=iOS" -showBuildSettings 2>&1)"
-          printf '%s\n' "$settings" | tee "$BUILD_LOGS/build-settings.log"
-          if ! printf '%s\n' "$settings" | grep -Eq 'SDKROOT = .*/iPhoneOS\.platform/.*\.sdk
-          PROJECT_FILE="ETOS LLM Studio/ETOS LLM Studio.xcodeproj/project.pbxproj"
-          if ! grep -q 'SDKROOT = watchos;' "$PROJECT_FILE"; then
-            echo "::error::The Xcode project does not declare a watchOS SDK for the embedded Watch target."
-            exit 1
-          fi
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -list 2>&1 | tee "$BUILD_LOGS/xcodebuild-list.log"
+          xcodebuild -resolvePackageDependencies -workspace "$WORKSPACE" -scheme "$SCHEME" 2>&1 | tee "$BUILD_LOGS/package-resolution.log"
+          xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "generic/platform=iOS" -showBuildSettings 2>&1 | tee "$BUILD_LOGS/build-settings.log"
 
       - name: Build llama.cpp static library for iOS
         shell: bash
         run: |
           set -o pipefail
-          CONFIGURATION=Release           SDK_NAME=iphoneos           PLATFORM_NAME=iphoneos           ARCHS=arm64           scripts/build-llama-static-library.sh --parallel             2>&1 | tee "$BUILD_LOGS/llama-iphoneos.log"
+          env CONFIGURATION=Release SDK_NAME=iphoneos PLATFORM_NAME=iphoneos ARCHS=arm64 scripts/build-llama-static-library.sh --parallel 2>&1 | tee "$BUILD_LOGS/llama-iphoneos.log"
 
       - name: Build llama.cpp static library for watchOS
         shell: bash
         run: |
           set -o pipefail
-          CONFIGURATION=Release           SDK_NAME=watchos           PLATFORM_NAME=watchos           ARCHS="arm64 arm64_32"           ETOS_LLAMA_FULL_ARCHS=1           scripts/build-llama-static-library.sh --parallel             2>&1 | tee "$BUILD_LOGS/llama-watchos.log"
+          env CONFIGURATION=Release SDK_NAME=watchos PLATFORM_NAME=watchos ARCHS="arm64 arm64_32" ETOS_LLAMA_FULL_ARCHS=1 scripts/build-llama-static-library.sh --parallel 2>&1 | tee "$BUILD_LOGS/llama-watchos.log"
 
-      - name: Verify llama.cpp products
+      - name: Verify and cache llama.cpp products
         shell: bash
         run: |
           set -euo pipefail
-          {
-            find Dependencies/llama-build/products -maxdepth 2 -type f -print
-            echo
-            for library in               Dependencies/llama-build/products/iphoneos-Release/libetos-llama.a               Dependencies/llama-build/products/watchos-Release/libetos-llama.a; do
-              if [[ ! -f "$library" ]]; then
-                echo "::error::Missing required static library: $library"
-                exit 1
-              fi
-              echo "$library"
-              xcrun lipo -info "$library"
-            done
-          } 2>&1 | tee "$BUILD_LOGS/llama-products.log"
+          IOS_LIBRARY="Dependencies/llama-build/products/iphoneos-Release/libetos-llama.a"
+          WATCH_LIBRARY="Dependencies/llama-build/products/watchos-Release/libetos-llama.a"
+          for library in "$IOS_LIBRARY" "$WATCH_LIBRARY"; do
+            if [[ ! -f "$library" ]]; then
+              echo "::error::Missing required static library: $library"
+              exit 1
+            fi
+            xcrun lipo -info "$library"
+          done
+          find Dependencies/llama-build/products -maxdepth 2 -type f -print | tee "$BUILD_LOGS/llama-products.log"
 
       - name: Save llama.cpp libraries immediately
         if: steps.llama-cache.outputs.cache-hit != 'true'
@@ -140,17 +120,6 @@ jobs:
         with:
           path: Dependencies/llama-build/products
           key: ${{ steps.llama-cache.outputs.cache-primary-key }}
-
-      - name: Resolve Swift packages
-        shell: bash
-        run: |
-          set -o pipefail
-          args=(
-            -resolvePackageDependencies
-            -workspace "$WORKSPACE"
-            -scheme "$SCHEME"
-          )
-          xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/package-resolution.log"
 
       - name: Build unsigned iOS application
         shell: bash
@@ -188,18 +157,13 @@ jobs:
           rm -rf "$OUTPUT_DIR/Payload"
           mkdir -p "$OUTPUT_DIR/Payload"
           ditto "$APP_PATH" "$OUTPUT_DIR/Payload/$APP_NAME"
-
           (
             cd "$OUTPUT_DIR"
             ditto -c -k --sequesterRsrc --keepParent Payload "ETOS-LLM-Studio-unsigned.ipa"
           )
-
           {
             echo "Packaged application: $APP_PATH"
-            echo "IPA: $OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
-            echo
             ls -lh "$OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
-            echo
             unzip -l "$OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
           } 2>&1 | tee "$BUILD_LOGS/packaging.log"
 
@@ -212,149 +176,6 @@ jobs:
           touch "$BUILD_LOGS/xcodebuild.log"
           {
             echo "Compiler errors and warnings"
-            echo "Generated from the complete raw xcodebuild log."
-            echo
-            grep -nE '(^|[[:space:]])(error|warning|fatal error):' "$BUILD_LOGS/xcodebuild.log" || true
-          } | tee "$BUILD_LOGS/diagnostics-summary.log"
-
-      - name: Upload unsigned IPA
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ETOS-LLM-Studio-unsigned-IPA
-          path: ${{ env.OUTPUT_DIR }}/ETOS-LLM-Studio-unsigned.ipa
-          if-no-files-found: error
-          retention-days: 14
-          compression-level: 0
-
-      - name: Upload build diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ETOS-build-diagnostics-${{ github.run_number }}
-          path: |
-            ${{ env.BUILD_LOGS }}
-            ${{ env.DERIVED_DATA }}/Logs
-          if-no-files-found: warn
-          retention-days: 14
-; then
-            echo "::error::The iOS target did not resolve to an iPhoneOS SDK."
-            exit 1
-          fi
-          PROJECT_FILE="ETOS LLM Studio/ETOS LLM Studio.xcodeproj/project.pbxproj"
-          if ! grep -q 'SDKROOT = watchos;' "$PROJECT_FILE"; then
-            echo "::error::The Xcode project does not declare a watchOS SDK for the embedded Watch target."
-            exit 1
-          fi
-
-      - name: Build llama.cpp static library for iOS
-        shell: bash
-        run: |
-          set -o pipefail
-          CONFIGURATION=Release           SDK_NAME=iphoneos           PLATFORM_NAME=iphoneos           ARCHS=arm64           scripts/build-llama-static-library.sh --parallel             2>&1 | tee "$BUILD_LOGS/llama-iphoneos.log"
-
-      - name: Build llama.cpp static library for watchOS
-        shell: bash
-        run: |
-          set -o pipefail
-          CONFIGURATION=Release           SDK_NAME=watchos           PLATFORM_NAME=watchos           ARCHS="arm64 arm64_32"           ETOS_LLAMA_FULL_ARCHS=1           scripts/build-llama-static-library.sh --parallel             2>&1 | tee "$BUILD_LOGS/llama-watchos.log"
-
-      - name: Verify llama.cpp products
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            find Dependencies/llama-build/products -maxdepth 2 -type f -print
-            echo
-            for library in               Dependencies/llama-build/products/iphoneos-Release/libetos-llama.a               Dependencies/llama-build/products/watchos-Release/libetos-llama.a; do
-              if [[ ! -f "$library" ]]; then
-                echo "::error::Missing required static library: $library"
-                exit 1
-              fi
-              echo "$library"
-              xcrun lipo -info "$library"
-            done
-          } 2>&1 | tee "$BUILD_LOGS/llama-products.log"
-
-      - name: Save llama.cpp libraries immediately
-        if: steps.llama-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: Dependencies/llama-build/products
-          key: ${{ steps.llama-cache.outputs.cache-primary-key }}
-
-      - name: Resolve Swift packages
-        shell: bash
-        run: |
-          set -o pipefail
-          args=(
-            -resolvePackageDependencies
-            -workspace "$WORKSPACE"
-            -scheme "$SCHEME"
-          )
-          xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/package-resolution.log"
-
-      - name: Build unsigned iOS application
-        shell: bash
-        run: |
-          set -o pipefail
-          args=(
-            -workspace "$WORKSPACE"
-            -scheme "$SCHEME"
-            -configuration "$CONFIGURATION"
-            -destination "generic/platform=iOS"
-            -derivedDataPath "$DERIVED_DATA"
-            -resultBundlePath "$BUILD_LOGS/ETOS-LLM-Studio.xcresult"
-            CODE_SIGNING_ALLOWED=NO
-            CODE_SIGNING_REQUIRED=NO
-            CODE_SIGN_IDENTITY=
-            DEVELOPMENT_TEAM=
-            COMPILER_INDEX_STORE_ENABLE=NO
-            build
-          )
-          xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/xcodebuild.log"
-
-      - name: Package unsigned IPA
-        shell: bash
-        run: |
-          set -euo pipefail
-          PRODUCTS_DIR="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphoneos"
-          APP_PATH="$(find "$PRODUCTS_DIR" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          if [[ -z "$APP_PATH" ]]; then
-            echo "::error::No iOS .app bundle was found in $PRODUCTS_DIR"
-            find "$DERIVED_DATA/Build/Products" -maxdepth 4 -print 2>&1 | tee "$BUILD_LOGS/build-products-tree.log" || true
-            exit 1
-          fi
-
-          APP_NAME="$(basename "$APP_PATH")"
-          rm -rf "$OUTPUT_DIR/Payload"
-          mkdir -p "$OUTPUT_DIR/Payload"
-          ditto "$APP_PATH" "$OUTPUT_DIR/Payload/$APP_NAME"
-
-          (
-            cd "$OUTPUT_DIR"
-            ditto -c -k --sequesterRsrc --keepParent Payload "ETOS-LLM-Studio-unsigned.ipa"
-          )
-
-          {
-            echo "Packaged application: $APP_PATH"
-            echo "IPA: $OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
-            echo
-            ls -lh "$OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
-            echo
-            unzip -l "$OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
-          } 2>&1 | tee "$BUILD_LOGS/packaging.log"
-
-      - name: Extract compiler diagnostics
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          mkdir -p "$BUILD_LOGS"
-          touch "$BUILD_LOGS/xcodebuild.log"
-          {
-            echo "Compiler errors and warnings"
-            echo "Generated from the complete raw xcodebuild log."
             echo
             grep -nE '(^|[[:space:]])(error|warning|fatal error):' "$BUILD_LOGS/xcodebuild.log" || true
           } | tee "$BUILD_LOGS/diagnostics-summary.log"
