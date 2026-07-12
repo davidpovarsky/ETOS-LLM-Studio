@@ -1,0 +1,213 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: etos-unsigned-ios-ipa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-unsigned-ipa:
+    name: Build ETOS unsigned IPA
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    env:
+      WORKSPACE: ETOS LLM Studio.xcworkspace
+      SCHEME: ETOS LLM Studio App
+      CONFIGURATION: Release
+      DERIVED_DATA: ${{ github.workspace }}/DerivedData
+      BUILD_LOGS: ${{ github.workspace }}/BuildLogs
+      OUTPUT_DIR: ${{ github.workspace }}/Artifacts
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+
+    steps:
+      - name: Check out repository and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Select latest stable Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_PATH="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' ! -iname '*beta*' -print | sort -V | tail -n 1)"
+          if [[ -z "$XCODE_PATH" ]]; then
+            echo "::error::No stable Xcode installation was found."
+            exit 1
+          fi
+          sudo xcode-select --switch "$XCODE_PATH/Contents/Developer"
+          echo "Selected Xcode: $XCODE_PATH"
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Prepare diagnostics and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$BUILD_LOGS" "$OUTPUT_DIR"
+          brew install cmake ninja
+          {
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Commit: $GITHUB_SHA"
+            echo "Runner: $RUNNER_OS / $RUNNER_ARCH"
+            echo "Workspace: $WORKSPACE"
+            echo "Scheme: $SCHEME"
+            echo "Configuration: $CONFIGURATION"
+            echo
+            xcodebuild -version
+            echo
+            xcodebuild -showsdks
+            echo
+            swift --version
+            echo
+            cmake --version
+            ninja --version
+            echo
+            git submodule status --recursive
+            echo
+            system_profiler SPSoftwareDataType
+          } 2>&1 | tee "$BUILD_LOGS/environment.log"
+
+      - name: Inspect Xcode workspace
+        shell: bash
+        run: |
+          set -o pipefail
+          args=(
+            -workspace "$WORKSPACE"
+            -scheme "$SCHEME"
+            -list
+          )
+          xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/xcodebuild-list.log"
+
+      - name: Build llama.cpp static library for iOS
+        shell: bash
+        run: |
+          set -o pipefail
+          CONFIGURATION=Release           SDK_NAME=iphoneos           PLATFORM_NAME=iphoneos           ARCHS=arm64           scripts/build-llama-static-library.sh --parallel             2>&1 | tee "$BUILD_LOGS/llama-iphoneos.log"
+
+      - name: Build llama.cpp static library for watchOS
+        shell: bash
+        run: |
+          set -o pipefail
+          CONFIGURATION=Release           SDK_NAME=watchos           PLATFORM_NAME=watchos           ARCHS="arm64 arm64_32"           ETOS_LLAMA_FULL_ARCHS=1           scripts/build-llama-static-library.sh --parallel             2>&1 | tee "$BUILD_LOGS/llama-watchos.log"
+
+      - name: Verify llama.cpp products
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            find Dependencies/llama-build/products -maxdepth 2 -type f -print
+            echo
+            for library in               Dependencies/llama-build/products/iphoneos-Release/libetos-llama.a               Dependencies/llama-build/products/watchos-Release/libetos-llama.a; do
+              if [[ ! -f "$library" ]]; then
+                echo "::error::Missing required static library: $library"
+                exit 1
+              fi
+              echo "$library"
+              xcrun lipo -info "$library"
+            done
+          } 2>&1 | tee "$BUILD_LOGS/llama-products.log"
+
+      - name: Resolve Swift packages
+        shell: bash
+        run: |
+          set -o pipefail
+          args=(
+            -resolvePackageDependencies
+            -workspace "$WORKSPACE"
+            -scheme "$SCHEME"
+          )
+          xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/package-resolution.log"
+
+      - name: Build unsigned iOS application
+        shell: bash
+        run: |
+          set -o pipefail
+          args=(
+            -workspace "$WORKSPACE"
+            -scheme "$SCHEME"
+            -configuration "$CONFIGURATION"
+            -sdk iphoneos
+            -destination "generic/platform=iOS"
+            -derivedDataPath "$DERIVED_DATA"
+            -resultBundlePath "$BUILD_LOGS/ETOS-LLM-Studio.xcresult"
+            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGN_IDENTITY=
+            DEVELOPMENT_TEAM=
+            COMPILER_INDEX_STORE_ENABLE=NO
+            build
+          )
+          xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/xcodebuild.log"
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCTS_DIR="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphoneos"
+          APP_PATH="$(find "$PRODUCTS_DIR" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$APP_PATH" ]]; then
+            echo "::error::No iOS .app bundle was found in $PRODUCTS_DIR"
+            find "$DERIVED_DATA/Build/Products" -maxdepth 4 -print 2>&1 | tee "$BUILD_LOGS/build-products-tree.log" || true
+            exit 1
+          fi
+
+          APP_NAME="$(basename "$APP_PATH")"
+          rm -rf "$OUTPUT_DIR/Payload"
+          mkdir -p "$OUTPUT_DIR/Payload"
+          ditto "$APP_PATH" "$OUTPUT_DIR/Payload/$APP_NAME"
+
+          (
+            cd "$OUTPUT_DIR"
+            ditto -c -k --sequesterRsrc --keepParent Payload "ETOS-LLM-Studio-unsigned.ipa"
+          )
+
+          {
+            echo "Packaged application: $APP_PATH"
+            echo "IPA: $OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
+            echo
+            ls -lh "$OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
+            echo
+            unzip -l "$OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
+          } 2>&1 | tee "$BUILD_LOGS/packaging.log"
+
+      - name: Extract compiler diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$BUILD_LOGS"
+          touch "$BUILD_LOGS/xcodebuild.log"
+          {
+            echo "Compiler errors and warnings"
+            echo "Generated from the complete raw xcodebuild log."
+            echo
+            grep -nE '(^|[[:space:]])(error|warning|fatal error):' "$BUILD_LOGS/xcodebuild.log" || true
+          } | tee "$BUILD_LOGS/diagnostics-summary.log"
+
+      - name: Upload unsigned IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ETOS-LLM-Studio-unsigned-IPA
+          path: ${{ env.OUTPUT_DIR }}/ETOS-LLM-Studio-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ETOS-build-diagnostics-${{ github.run_number }}
+          path: |
+            ${{ env.BUILD_LOGS }}
+            ${{ env.DERIVED_DATA }}/Logs
+          if-no-files-found: warn
+          retention-days: 14
