@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -26,12 +27,28 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
 
     steps:
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Check out repository and submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Select latest stable Xcode
         shell: bash
         run: |
@@ -46,6 +63,14 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Prepare diagnostics and build tools
         shell: bash
         run: |
@@ -72,6 +97,14 @@ jobs:
             git submodule status --recursive
           } 2>&1 | tee "$BUILD_LOGS/environment.log"
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Restore cached llama.cpp libraries
         id: llama-cache
         uses: actions/cache/restore@v4
@@ -79,6 +112,14 @@ jobs:
           path: Dependencies/llama-build/products
           key: etos-llama-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Dependencies/llama.cpp/CMakeLists.txt', 'scripts/build-llama-static-library.sh') }}
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Inspect workspace and resolve packages
         shell: bash
         run: |
@@ -87,18 +128,42 @@ jobs:
           xcodebuild -resolvePackageDependencies -workspace "$WORKSPACE" -scheme "$SCHEME" 2>&1 | tee "$BUILD_LOGS/package-resolution.log"
           xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "generic/platform=iOS" -showBuildSettings 2>&1 | tee "$BUILD_LOGS/build-settings.log"
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Build llama.cpp static library for iOS
         shell: bash
         run: |
           set -o pipefail
           env CONFIGURATION=Release SDK_NAME=iphoneos PLATFORM_NAME=iphoneos ARCHS=arm64 scripts/build-llama-static-library.sh --parallel 2>&1 | tee "$BUILD_LOGS/llama-iphoneos.log"
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Build llama.cpp static library for watchOS
         shell: bash
         run: |
           set -o pipefail
           env CONFIGURATION=Release SDK_NAME=watchos PLATFORM_NAME=watchos ARCHS="arm64 arm64_32" ETOS_LLAMA_FULL_ARCHS=1 scripts/build-llama-static-library.sh --parallel 2>&1 | tee "$BUILD_LOGS/llama-watchos.log"
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Verify and cache llama.cpp products
         shell: bash
         run: |
@@ -114,6 +179,15 @@ jobs:
           done
           find Dependencies/llama-build/products -maxdepth 2 -type f -print | tee "$BUILD_LOGS/llama-products.log"
 
+      - name: Live Activity · refresh
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Save llama.cpp libraries immediately
         if: steps.llama-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -121,6 +195,14 @@ jobs:
           path: Dependencies/llama-build/products
           key: ${{ steps.llama-cache.outputs.cache-primary-key }}
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Build unsigned iOS application
         shell: bash
         run: |
@@ -141,6 +223,14 @@ jobs:
           )
           xcodebuild "${args[@]}" 2>&1 | tee "$BUILD_LOGS/xcodebuild.log"
 
+      - name: Live Activity · refresh
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Package unsigned IPA
         shell: bash
         run: |
@@ -167,6 +257,15 @@ jobs:
             unzip -l "$OUTPUT_DIR/ETOS-LLM-Studio-unsigned.ipa"
           } 2>&1 | tee "$BUILD_LOGS/packaging.log"
 
+      - name: Live Activity · refresh
+        if: always()
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Extract compiler diagnostics
         if: always()
         shell: bash
@@ -180,6 +279,15 @@ jobs:
             grep -nE '(^|[[:space:]])(error|warning|fatal error):' "$BUILD_LOGS/xcodebuild.log" || true
           } | tee "$BUILD_LOGS/diagnostics-summary.log"
 
+      - name: Live Activity · refresh
+        if: success()
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Upload unsigned IPA
         if: success()
         uses: actions/upload-artifact@v4
@@ -190,6 +298,15 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+      - name: Live Activity · refresh
+        if: always()
+        uses: davidpovarsky/github-automation/live-refresh@main
+        continue-on-error: true
+        with:
+          event: refresh
+          device_id: ${{ secrets.NOTIFY_DEVICE_ID }}
+          token: ${{ secrets.NOTIFY_DEVICE_TOKEN }}
+          github_token: ${{ github.token }}
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
